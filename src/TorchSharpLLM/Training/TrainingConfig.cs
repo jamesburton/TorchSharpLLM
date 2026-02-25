@@ -27,4 +27,20 @@ public sealed class TrainingConfig
     /// If true, uses LoRA for the trainable experts instead of full fine-tuning.
     /// </summary>
     public bool UseLoRA { get; init; } = false;
+
+    /// <summary>
+    /// Directory containing tokenized dataset subdirectories.
+    /// </summary>
+    public string DataDir { get; init; } = "data";
+
+    /// <summary>
+    /// Maximum number of training steps (overrides epoch-based calculation).
+    /// Null = use NumEpochs to determine total steps.
+    /// </summary>
+    public int? MaxSteps { get; init; }
+
+    /// <summary>
+    /// Data mixing strategy: Proportional, RoundRobin, or SingleDomain.
+    /// </summary>
+    public string MixingStrategy { get; init; } = "Proportional";
 }

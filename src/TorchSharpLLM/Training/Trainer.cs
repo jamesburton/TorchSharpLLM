@@ -1,4 +1,5 @@
 using TorchSharp;
+using TorchSharpLLM.Data;
 using TorchSharpLLM.Models;
 using static TorchSharp.torch;
 
@@ -147,5 +148,105 @@ public sealed class Trainer
         }
 
         Console.WriteLine("[Trainer] Training complete.");
+    }
+
+    /// <summary>
+    /// Run a full training loop over real tokenized datasets via MoEDataLoader.
+    /// Supports multi-epoch training with per-domain loss tracking.
+    /// </summary>
+    public void TrainOnDatasets(MoEDataLoader dataLoader, int? maxStepsOverride = null)
+    {
+        int stepsPerEpoch = Math.Max(1, dataLoader.BatchesPerEpoch());
+        int totalSteps = maxStepsOverride ?? stepsPerEpoch * _config.NumEpochs;
+
+        Console.WriteLine($"[Trainer] Training on {dataLoader.DomainCount} domains, {dataLoader.TotalTokens:N0} tokens");
+        Console.WriteLine($"[Trainer] Batch: {_config.BatchSize}, SeqLen: {_config.SequenceLength}, " +
+                          $"Steps/epoch: {stepsPerEpoch:N0}, Total steps: {totalSteps:N0}");
+
+        // Per-domain loss tracking
+        var domainLossSum = new Dictionary<int, double>();
+        var domainLossCount = new Dictionary<int, int>();
+
+        for (int step = 1; step <= totalSteps; step++)
+        {
+            using var batch = dataLoader.NextBatch();
+            var (totalLoss, lmLoss, auxLoss) = TrainStep(batch.InputIds, batch.TargetIds);
+
+            // Track per-domain loss
+            int domainId = batch.DomainId;
+            if (!domainLossSum.ContainsKey(domainId)) domainLossSum[domainId] = 0;
+            if (!domainLossCount.ContainsKey(domainId)) domainLossCount[domainId] = 0;
+            domainLossSum[domainId] += lmLoss;
+            domainLossCount[domainId]++;
+
+            if (step % _config.LogEveryNSteps == 0 || step == 1)
+            {
+                string domainName = domainId >= 0
+                    ? DatasetCatalog.ById(domainId)?.Name ?? $"d{domainId}"
+                    : "mixed";
+                Console.WriteLine($"  Step {step}/{totalSteps} | Total: {totalLoss:F4} | " +
+                                  $"LM: {lmLoss:F4} | Aux: {auxLoss:F6} | Domain: {domainName}");
+            }
+
+            if (_config.SaveEveryNSteps > 0 && step % _config.SaveEveryNSteps == 0)
+            {
+                string path = Path.Combine(_config.CheckpointDir, $"checkpoint_step_{step}.pt");
+                Directory.CreateDirectory(_config.CheckpointDir);
+                _model.save(path);
+                Console.WriteLine($"  Saved checkpoint: {path}");
+            }
+
+            // Epoch boundary
+            if (step % stepsPerEpoch == 0)
+            {
+                int epoch = step / stepsPerEpoch;
+                Console.WriteLine($"\n  ── Epoch {epoch} complete ──");
+                PrintDomainLossSummary(domainLossSum, domainLossCount);
+                domainLossSum.Clear();
+                domainLossCount.Clear();
+                dataLoader.ResetEpoch();
+            }
+        }
+
+        Console.WriteLine("[Trainer] Training complete.");
+        if (domainLossSum.Count > 0)
+            PrintDomainLossSummary(domainLossSum, domainLossCount);
+    }
+
+    /// <summary>
+    /// Run targeted training: train only on a specific domain's data,
+    /// optionally only unfreezing the corresponding expert.
+    /// </summary>
+    public void TrainOnDomain(MoEDataLoader dataLoader, int domainIndex, int steps)
+    {
+        Console.WriteLine($"[Trainer] Targeted training on domain {domainIndex} for {steps} steps");
+
+        for (int step = 1; step <= steps; step++)
+        {
+            using var batch = dataLoader.NextBatchFromDomain(domainIndex);
+            var (totalLoss, lmLoss, auxLoss) = TrainStep(batch.InputIds, batch.TargetIds);
+
+            if (step % _config.LogEveryNSteps == 0 || step == 1)
+            {
+                Console.WriteLine($"  Step {step}/{steps} | Total: {totalLoss:F4} | " +
+                                  $"LM: {lmLoss:F4} | Aux: {auxLoss:F6}");
+            }
+        }
+
+        Console.WriteLine("[Trainer] Domain training complete.");
+    }
+
+    private static void PrintDomainLossSummary(Dictionary<int, double> sums, Dictionary<int, int> counts)
+    {
+        Console.WriteLine("  Per-domain average loss:");
+        foreach (var (domainId, sum) in sums.OrderBy(kv => kv.Key))
+        {
+            int count = counts.GetValueOrDefault(domainId, 1);
+            double avg = sum / count;
+            string name = domainId >= 0
+                ? DatasetCatalog.ById(domainId)?.Name ?? $"d{domainId}"
+                : "mixed";
+            Console.WriteLine($"    {name,-20} avg_loss={avg:F4} ({count} batches)");
+        }
     }
 }
