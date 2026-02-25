@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TorchSharp" Version="0.103.0" />
+    <!-- CPU backend for development; swap to TorchSharp-cuda for GPU -->
+    <PackageReference Include="TorchSharp-cpu" Version="0.103.0" />
+  </ItemGroup>
+
+</Project>
